@@ -127,10 +127,11 @@ The number of encoded dimensions is `n_levels * n_features_per_level`.
 	                           // the factor by which the resolution
 	                           // of each grid is larger (per axis)
 	                           // than that of the preceding level.
-	"interpolation": "Linear"  // How to interpolate nearby grid
+	"interpolation": "Linear", // How to interpolate nearby grid
 	                           // lookups. Can be "Nearest", "Linear",
 	                           // or "Smoothstep" (for smooth deri-
 	                           // vatives).
+	"pos_grad": "Analytical"   // Can be "Numerical", "Analytical". See [https://d1qx31qr3h6wln.cloudfront.net/publications/Li_Neuralangelo_High-Fidelity_Neural_Surface_Reconstruction_CVPR_2023_paper.pdf]
 }
 ```
 

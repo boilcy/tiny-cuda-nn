@@ -125,6 +125,9 @@ std::string to_string(HashType hash_type);
 InterpolationType string_to_interpolation_type(const std::string& interpolation_type);
 std::string to_string(InterpolationType interpolation_type);
 
+PosGradType string_to_pos_grad_type(const std::string& pos_grad_type);
+std::string to_string(PosGradType pos_grad_type);
+
 ReductionType string_to_reduction_type(const std::string& reduction_type);
 std::string to_string(ReductionType reduction_type);
 

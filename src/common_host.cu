@@ -176,6 +176,24 @@ std::string to_string(InterpolationType interpolation_type) {
 	}
 }
 
+PosGradType string_to_pos_grad_type(const std::string& pos_grad_type) {
+	if (equals_case_insensitive(pos_grad_type, "Numerical")) {
+		return PosGradType::Numerical;
+	} else if (equals_case_insensitive(pos_grad_type, "Analytical")) {
+		return PosGradType::Analytical;
+	}
+
+	throw std::runtime_error{fmt::format("Invalid position gradient type: {}", pos_grad_type)};
+}
+
+std::string to_string(PosGradType pos_grad_type) {
+	switch (pos_grad_type) {
+		case PosGradType::Numerical: return "Numerical";
+		case PosGradType::Analytical: return "Analytical";
+		default: throw std::runtime_error{"Invalid position gradient type."};
+	}
+}
+
 ReductionType string_to_reduction_type(const std::string& reduction_type) {
 	if (equals_case_insensitive(reduction_type, "Concatenation")) {
 		return ReductionType::Concatenation;

@@ -154,6 +154,11 @@ enum class InterpolationType {
 	Smoothstep,
 };
 
+enum class PosGradType {
+	Numerical,
+	Analytical,
+};
+
 enum class MatrixLayout {
 	RowMajor = 0,
 	SoA = 0, // For data matrices TCNN's convention is RowMajor == SoA (struct of arrays)

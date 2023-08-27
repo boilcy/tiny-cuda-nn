@@ -59,7 +59,8 @@ __global__ void kernel_grid(
 	const T* __restrict__ grid,
 	MatrixView<const float> positions_in,
 	T* __restrict__ encoded_positions,
-	float* __restrict__ dy_dx
+	float* __restrict__ dy_dx,
+	const PosGradType pos_grad_type
 ) {
 	const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= num_elements) return;
@@ -172,34 +173,75 @@ __global__ void kernel_grid(
 	if (dy_dx) {
 		vec<N_POS_DIMS> grads[N_FEATURES_PER_LEVEL] = {0.0f};
 
-		TCNN_PRAGMA_UNROLL
-		for (uint32_t grad_dim = 0; grad_dim < N_POS_DIMS; ++grad_dim) {
+		if (pos_grad_type == PosGradType::Analytical) {
 			TCNN_PRAGMA_UNROLL
-			for (uint32_t idx = 0; idx < (1 << (N_POS_DIMS-1)); ++idx) {
-				float weight = scale;
-				uvec<N_POS_DIMS> pos_grid_local;
-
+			for (uint32_t grad_dim = 0; grad_dim < N_POS_DIMS; ++grad_dim) {
 				TCNN_PRAGMA_UNROLL
-				for (uint32_t non_grad_dim = 0; non_grad_dim < N_POS_DIMS-1; ++non_grad_dim) {
-					const uint32_t dim = non_grad_dim >= grad_dim ? (non_grad_dim+1) : non_grad_dim;
+				for (uint32_t idx = 0; idx < (1 << (N_POS_DIMS-1)); ++idx) {
+					float weight = scale;
+					uvec<N_POS_DIMS> pos_grid_local;
 
-					if ((idx & (1<<non_grad_dim)) == 0) {
-						weight *= 1 - pos[dim];
-						pos_grid_local[dim] = pos_grid[dim];
-					} else {
-						weight *= pos[dim];
-						pos_grid_local[dim] = pos_grid[dim] + 1;
+					TCNN_PRAGMA_UNROLL
+					for (uint32_t non_grad_dim = 0; non_grad_dim < N_POS_DIMS-1; ++non_grad_dim) {
+						const uint32_t dim = non_grad_dim >= grad_dim ? (non_grad_dim+1) : non_grad_dim;
+
+						if ((idx & (1<<non_grad_dim)) == 0) {
+							weight *= 1 - pos[dim];
+							pos_grid_local[dim] = pos_grid[dim];
+						} else {
+							weight *= pos[dim];
+							pos_grid_local[dim] = pos_grid[dim] + 1;
+						}
+					}
+
+					pos_grid_local[grad_dim] = pos_grid[grad_dim];
+					auto val_left = grid_val(pos_grid_local);
+					pos_grid_local[grad_dim] = pos_grid[grad_dim] + 1;
+					auto val_right = grid_val(pos_grid_local);
+
+					TCNN_PRAGMA_UNROLL
+					for (uint32_t feature = 0; feature < N_FEATURES_PER_LEVEL; ++feature) {
+						grads[feature][grad_dim] += weight * ((float)val_right[feature] - (float)val_left[feature]) * pos_derivative[grad_dim];
 					}
 				}
+			}
+		} else {
+			TCNN_PRAGMA_UNROLL
+			for (uint32_t grad_dim = 0; grad_dim < N_POS_DIMS; ++grad_dim) {
+				tvec<T, N_FEATURES_PER_LEVEL, PARAMS_ALIGNED ? sizeof(T) * N_FEATURES_PER_LEVEL : sizeof(T)> result_0 = {};
+				tvec<T, N_FEATURES_PER_LEVEL, PARAMS_ALIGNED ? sizeof(T) * N_FEATURES_PER_LEVEL : sizeof(T)> result_1 = {};
 
-				pos_grid_local[grad_dim] = pos_grid[grad_dim];
-				auto val_left = grid_val(pos_grid_local);
-				pos_grid_local[grad_dim] = pos_grid[grad_dim] + 1;
-				auto val_right = grid_val(pos_grid_local);
+				TCNN_PRAGMA_UNROLL
+				for (uint32_t idx = 0; idx < (1 << N_POS_DIMS); ++idx) {
+					float weight = 1;
+					uvec<N_POS_DIMS> pos_grid_local_0;
+					uvec<N_POS_DIMS> pos_grid_local_1;
+
+					TCNN_PRAGMA_UNROLL
+					for (uint32_t dim = 0; dim < N_POS_DIMS; ++dim) {
+						if(dim==grad_dim){
+							pos_grid_local_0[dim] = pos_grid[dim] - 1;
+							pos_grid_local_1[dim] = pos_grid[dim] + 1;
+						} else {
+							pos_grid_local_0[dim] = pos_grid[dim];
+							pos_grid_local_1[dim] = pos_grid[dim];
+						}
+						if ((idx & (1<<dim)) == 0) {
+							weight *= 1 - pos[dim];
+						} else {
+							weight *= pos[dim];
+							pos_grid_local_0[dim] += 1;
+							pos_grid_local_1[dim] += 1;
+						}
+					}
+
+					result_0 = fma((T)weight, grid_val(pos_grid_local_0), result_0);
+					result_1 = fma((T)weight, grid_val(pos_grid_local_1), result_1);
+				}
 
 				TCNN_PRAGMA_UNROLL
 				for (uint32_t feature = 0; feature < N_FEATURES_PER_LEVEL; ++feature) {
-					grads[feature][grad_dim] += weight * ((float)val_right[feature] - (float)val_left[feature]) * pos_derivative[grad_dim];
+					grads[feature][grad_dim] += 0.5*scale*((float)result_0[feature] - (float)result_1[feature]) * pos_derivative[grad_dim];
 				}
 			}
 		}
@@ -672,7 +714,8 @@ public:
 		float per_level_scale,
 		bool stochastic_interpolation,
 		InterpolationType interpolation_type,
-		GridType grid_type
+		GridType grid_type,
+		PosGradType pos_grad_type
 	) :
 	m_n_features{n_features},
 	m_log2_hashmap_size{log2_hashmap_size},
@@ -680,7 +723,8 @@ public:
 	m_per_level_scale{per_level_scale},
 	m_stochastic_interpolation{stochastic_interpolation},
 	m_interpolation_type{interpolation_type},
-	m_grid_type{grid_type}
+	m_grid_type{grid_type},
+	m_pos_grad_type{pos_grad_type}
 	{
 		m_n_levels = div_round_up(m_n_features, N_FEATURES_PER_LEVEL);
 		uint32_t offset = 0;
@@ -789,7 +833,8 @@ public:
 			use_inference_params ? this->inference_params() : this->params(),
 			forward->positions.data() ? forward->positions.view() : input.view(),
 			encoded_positions_soa,
-			forward->dy_dx.data()
+			forward->dy_dx.data(),
+			m_pos_grad_type
 		);
 
 		if (output && output->layout() == AoS) {
@@ -1138,6 +1183,7 @@ private:
 	bool m_stochastic_interpolation;
 	InterpolationType m_interpolation_type;
 	GridType m_grid_type;
+	PosGradType m_pos_grad_type;
 };
 
 template <typename T, uint32_t N_FEATURES_PER_LEVEL, HashType HASH_TYPE>
@@ -1158,6 +1204,7 @@ GridEncoding<T>* create_grid_encoding_templated_2(uint32_t n_dims_to_encode, con
 
 	const uint32_t n_levels = n_features / N_FEATURES_PER_LEVEL;
 	const GridType grid_type = string_to_grid_type(encoding.value("type", default_type));
+	const PosGradType pos_grad_type = string_to_pos_grad_type(encoding.value("pos_grad", "Analytical"));
 	const uint32_t base_resolution = encoding.value("base_resolution", 16u);
 
 #define TCNN_GRID_PARAMS \
@@ -1168,6 +1215,7 @@ GridEncoding<T>* create_grid_encoding_templated_2(uint32_t n_dims_to_encode, con
 	encoding.value("stochastic_interpolation", false), \
 	string_to_interpolation_type(encoding.value("interpolation", "Linear")), \
 	grid_type, \
+	pos_grad_type, \
 
 	// If higher-dimensional hash encodings are desired, corresponding switch cases can be added
 	switch (n_dims_to_encode) {
